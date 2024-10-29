@@ -14,9 +14,6 @@ jobs:
           - arch: aarch64_generic
             target: aarch64_generic
 
-          - arch: x86_64
-            target: x86-64
-
     steps:
       - uses: actions/checkout@v3
         with:
