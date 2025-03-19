@@ -24,10 +24,12 @@ local uciType = 'servers'
 local ucic = luci.model.uci.cursor()
 local proxy = ucic:get_first(name, 'server_subscribe', 'proxy', '0')
 local switch = ucic:get_first(name, 'server_subscribe', 'switch', '1')
+local allow_insecure = ucic:get_first(name, 'server_subscribe', 'allow_insecure', '0')
 local subscribe_url = ucic:get_first(name, 'server_subscribe', 'subscribe_url', {})
 local filter_words = ucic:get_first(name, 'server_subscribe', 'filter_words', '过期时间/剩余流量')
 local save_words = ucic:get_first(name, 'server_subscribe', 'save_words', '')
-local v2_ss = luci.sys.exec('type -t -p ss-redir sslocal') ~= "" and "ss" or "v2ray"
+local v2_ss = luci.sys.exec('type -t -p sslocal ss-redir') ~= "" and "ss" or "v2ray"
+local ss_variant = luci.sys.exec('type -t -p sslocal') ~= "" and "isSSRust" or luci.sys.exec('type -t -p ss-redir') ~= "" and "isSSLibev"
 local v2_tj = luci.sys.exec('type -t -p trojan') ~= "" and "trojan" or "v2ray"
 local log = function(...)
 	print(os.date("%Y-%m-%d %H:%M:%S ") .. table.concat({...}, " "))
@@ -193,6 +195,24 @@ local function processData(szType, content)
 			result.splithttp_host = info.host
 			result.splithttp_path = info.path
 		end
+		if info.net == 'xhttp' then
+			result.xhttp_mode = info.mode
+			result.xhttp_host = info.host
+			result.xhttp_path = info.path
+			-- 检查 extra 参数是否存在且非空
+			result.enable_xhttp_extra = (info.extra and info.extra ~= "") and "1" or nil
+			result.xhttp_extra = (info.extra and info.extra ~= "") and info.extra or nil
+			-- 尝试解析 JSON 数据
+			local success, Data = pcall(jsonParse, info.extra)
+			if success and Data then
+				local address = (Data.extra and Data.extra.downloadSettings and Data.extra.downloadSettings.address)
+					or (Data.downloadSettings and Data.downloadSettings.address)
+				result.download_address = address and address ~= "" and address or nil
+			else
+				-- 如果解析失败，清空下载地址
+				result.download_address = nil
+			end
+		end
 		if info.net == 'h2' then
 			result.h2_host = info.host
 			result.h2_path = info.path
@@ -231,12 +251,15 @@ local function processData(szType, content)
 		end
 		if info.tls == "tls" or info.tls == "1" then
 			result.tls = "1"
+			if info.alpn and info.alpn ~= "" then
+				result.xhttp_alpn = info.alpn
+			end
 			if info.sni and info.sni ~= "" then
 				result.tls_host = info.sni
 			elseif info.host then
 				result.tls_host = info.host
 			end
-			result.insecure = 1
+			result.insecure = allow_insecure
 		else
 			result.tls = "0"
 		end
@@ -256,6 +279,7 @@ local function processData(szType, content)
 		result.alias = UrlDecode(alias)
 		result.type = v2_ss
 		result.v2ray_protocol = (v2_ss == "v2ray") and "shadowsocks" or nil
+		result.ss_variant = ss_variant
 		result.encrypt_method_ss = method
 		result.password = password
 		result.server = host[1]
@@ -279,6 +303,10 @@ local function processData(szType, content)
 				-- 部分机场下发的插件名为 simple-obfs，这里应该改为 obfs-local
 				if result.plugin == "simple-obfs" then
 					result.plugin = "obfs-local"
+				end
+				-- 如果插件不為 none，確保 enable_plugin 為 1
+				if result.plugin ~= "none" and result.plugin ~= "" then
+					result.enable_plugin = 1
 				end
 			end
 		else
@@ -353,6 +381,11 @@ local function processData(szType, content)
 				local t = split(v, '=')
 				params[t[1]] = t[2]
 			end
+			if params.alpn then
+				-- 处理 alpn 参数
+				result.xhttp_alpn = params.alpn
+			end
+
 			if params.sni then
 				-- 未指定peer（sni）默认使用remote addr
 				result.tls_host = params.sni
@@ -385,6 +418,23 @@ local function processData(szType, content)
 			elseif result.transport == "splithttp" then
 				result.splithttp_host = (result.tls ~= "1") and (params.host and UrlDecode(params.host)) or nil
 				result.splithttp_path = params.path and UrlDecode(params.path) or "/"
+			elseif result.transport == "xhttp" then
+				result.xhttp_host = (result.tls ~= "1") and (params.host and UrlDecode(params.host)) or nil
+				result.xhttp_mode = params.mode or "auto"
+				result.xhttp_path = params.path and UrlDecode(params.path) or "/"
+				-- 检查 extra 参数是否存在且非空
+				result.enable_xhttp_extra = (params.extra and params.extra ~= "") and "1" or nil
+				result.xhttp_extra = (params.extra and params.extra ~= "") and params.extra or nil
+				-- 尝试解析 JSON 数据
+				local success, Data = pcall(jsonParse, params.extra)
+				if success and Data then
+					local address = (Data.extra and Data.extra.downloadSettings and Data.extra.downloadSettings.address)
+						or (Data.downloadSettings and Data.downloadSettings.address)
+					result.download_address = address and address ~= "" and address or nil
+				else
+					-- 如果解析失败，清空下载地址
+					result.download_address = nil
+				end
 			elseif result.transport == "http" or result.transport == "h2" then
 				result.transport = "h2"
 				result.h2_host = params.host and UrlDecode(params.host) or nil
@@ -426,6 +476,7 @@ local function processData(szType, content)
 		result.vless_encryption = params.encryption or "none"
 		result.transport = params.type or "tcp"
 		result.tls = (params.security == "tls" or params.security == "xtls") and "1" or "0"
+		result.xhttp_alpn = params.alpn or ""
 		result.tls_host = params.sni
 		result.tls_flow = (params.security == "tls" or params.security == "reality") and params.flow or nil
 		result.fingerprint = params.fp
@@ -442,6 +493,23 @@ local function processData(szType, content)
 		elseif result.transport == "splithttp" then
 			result.splithttp_host = (result.tls ~= "1") and (params.host and UrlDecode(params.host)) or nil
 			result.splithttp_path = params.path and UrlDecode(params.path) or "/"
+		elseif result.transport == "xhttp" then
+			result.xhttp_host = (result.tls ~= "1") and (params.host and UrlDecode(params.host)) or nil
+			result.xhttp_mode = params.mode or "auto"
+			result.xhttp_path = params.path and UrlDecode(params.path) or "/"
+			-- 检查 extra 参数是否存在且非空
+			result.enable_xhttp_extra = (params.extra and params.extra ~= "") and "1" or nil
+			result.xhttp_extra = (params.extra and params.extra ~= "") and params.extra or nil
+			-- 尝试解析 JSON 数据
+			local success, Data = pcall(jsonParse, params.extra)
+			if success and Data then
+				local address = (Data.extra and Data.extra.downloadSettings and Data.extra.downloadSettings.address)
+					or (Data.downloadSettings and Data.downloadSettings.address)
+				result.download_address = address and address ~= "" and address or nil
+			else
+				-- 如果解析失败，清空下载地址
+				result.download_address = nil
+			end
 		-- make it compatible with bullshit, "h2" transport is non-existent at all
 		elseif result.transport == "http" or result.transport == "h2" then
 			result.transport = "h2"

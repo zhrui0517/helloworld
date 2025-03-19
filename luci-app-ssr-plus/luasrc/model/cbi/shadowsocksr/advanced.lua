@@ -66,6 +66,7 @@ o:value("https://fastly.jsdelivr.net/gh/gaoyifan/china-operator-ip@ip-lists/chin
 o.default = "https://ispip.clang.cn/all_cn.txt"
 
 o = s:option(Flag, "netflix_enable", translate("Enable Netflix Mode"))
+o.description = translate("When disabled shunt mode, will same time stopped shunt service.")
 o.rmempty = false
 
 o = s:option(Value, "nfip_url", translate("nfip_url"))
@@ -169,15 +170,15 @@ o.rmempty = false
 o.cfgvalue = function(self, section)
     local enabled = m:get(section, "enabled")
     if enabled == "0" then
-        return m:get(section, "old_server") or "same"
+        return m:get(section, "old_server")
     end
-    return Value.cfgvalue(self, section) or "same" -- Default to `same` when enabled
+    return Value.cfgvalue(self, section) -- Default to `same` when enabled
 end
 
 o.write = function(self, section, value)
     local enabled = m:get(section, "enabled")
     if enabled == "0" then
-        local old_server = Value.cfgvalue(self, section) or "same"
+        local old_server = Value.cfgvalue(self, section)
         if old_server ~= "nil" then
             m:set(section, "old_server", old_server)
         end
@@ -204,12 +205,12 @@ for key, server_type in pairs(type_table) do
 end
 
 -- Socks User
-o = s:option(Value, "socks5_user", translate("Socks5 User"), translate("Only when auth is password valid, Mandatory."))
+o = s:option(Value, "socks5_user", translate("Socks5 User"), translate("Only when Socks5 Auth Mode is password valid, Mandatory."))
 o.rmempty = true
 o:depends("socks5_auth", "password")
 
 -- Socks Password
-o = s:option(Value, "socks5_pass", translate("Socks5 Password"), translate("Only when auth is password valid, Not mandatory."))
+o = s:option(Value, "socks5_pass", translate("Socks5 Password"), translate("Only when Socks5 Auth Mode is password valid, Not mandatory."))
 o.password = true
 o.rmempty = true
 o:depends("socks5_auth", "password")
@@ -263,7 +264,7 @@ o.default = 0
 s = m:section(TypedSection, "xray_noise_packets", translate("Xray Noise Packets"))
 s.description = translate(
     "<font style='color:red'>" .. translate("To send noise packets, select \"Noise\" in Xray Settings.") .. "</font>" ..
-    "<br/><font><b>" .. translate("For specific usage, see: ") .. "</b></font>" ..
+    "<br/><font><b>" .. translate("For specific usage, see:") .. "</b></font>" ..
     "<a href='https://xtls.github.io/config/outbounds/freedom.html' target='_blank'>" ..
     "<font style='color:green'><b>" .. translate("Click to the page") .. "</b></font></a>")
 s.template = "cbi/tblsection"
