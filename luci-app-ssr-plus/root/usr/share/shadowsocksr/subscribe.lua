@@ -29,6 +29,7 @@ local allow_insecure = ucic:get_first(name, 'server_subscribe', 'allow_insecure'
 local subscribe_url = ucic:get_first(name, 'server_subscribe', 'subscribe_url', {})
 local filter_words = ucic:get_first(name, 'server_subscribe', 'filter_words', '过期时间/剩余流量')
 local save_words = ucic:get_first(name, 'server_subscribe', 'save_words', '')
+local user_agent = ucic:get_first(name, 'server_subscribe', 'user_agent', 'v2rayN/9.99')
 -- 读取 ss_type 设置
 local ss_type = ucic:get_first(name, 'server_subscribe', 'ss_type', 'ss-rust')
 -- 根据 ss_type 选择对应的程序
@@ -177,8 +178,10 @@ end
 local function processData(szType, content)
 	local result = {type = szType, local_port = 1234, kcp_param = '--nocomp'}
 	-- 检查JSON的格式如不完整丢弃
-	if not isCompleteJSON(content) then
-		return nil
+	if not (szType == "sip008" or szType == "ssd") then
+		if not isCompleteJSON(content) then
+			return nil
+		end
 	end
 
 	if szType == "hysteria2" or szType == "hy2" then
@@ -417,6 +420,7 @@ local function processData(szType, content)
 	elseif szType == "sip008" then
 		result.type = v2_ss
 		result.v2ray_protocol = (v2_ss == "v2ray") and "shadowsocks" or nil
+		result.has_ss_type = has_ss_type
 		result.server = content.server
 		result.server_port = content.server_port
 		result.password = content.password
@@ -430,6 +434,7 @@ local function processData(szType, content)
 	elseif szType == "ssd" then
 		result.type = v2_ss
 		result.v2ray_protocol = (v2_ss == "v2ray") and "shadowsocks" or nil
+		result.has_ss_type = has_ss_type
 		result.server = content.server
 		result.server_port = content.port
 		result.password = content.password
@@ -678,13 +683,20 @@ local function processData(szType, content)
 	result.switch_enable = switch_enable
 	return result
 end
--- wget
-local function wget(url)
-	-- 清理URL中的隐藏字符
-	url = url:gsub("%s+$", ""):gsub("^%s+", ""):gsub("%z", "")
+-- curl
+local function curl(url)
+    -- 清理 URL 中的隐藏字符
+    url = url:gsub("%s+$", ""):gsub("^%s+", ""):gsub("%z", "")
 
-	local stdout = luci.sys.exec('wget-ssl --timeout=20 --tries=3 -q --user-agent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/44.0.2403.157 Safari/537.36" --no-check-certificate -O- "' .. url .. '"')
-	return trim(stdout)
+    -- 构建curl命令（确保 user_agent 为空时不添加 -A 参数）
+    local cmd = string.format(
+        'curl -sSL --connect-timeout 20 --max-time 30 --retry 3 %s --insecure --location "%s"',
+        user_agent ~= "" and ('-A "' .. user_agent .. '"') or "",  -- 添加 or "" 处理 nil 情况
+        url:gsub('["$`\\]', '\\%0')  -- 安全转义
+    )
+    
+    local stdout = luci.sys.exec(cmd)
+    return trim(stdout)
 end
 
 local function check_filer(result)
@@ -737,7 +749,7 @@ local execute = function()
 			luci.sys.init.stop(name)
 		end
 		for k, url in ipairs(subscribe_url) do
-			local raw = wget(url)
+			local raw = curl(url)
 			if #raw > 0 then
 				local nodes, szType
 				local groupHash = md5(url)
