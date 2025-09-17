@@ -201,7 +201,7 @@ local function processData(szType, content)
 		result.alias = url.fragment and UrlDecode(url.fragment) or nil
 		result.type = hy2_type
 		result.server = url.host
-		result.server_port = url.port
+		result.server_port = url.port or 443
 		if params.protocol then
 			result.flag_transport = "1"
 			result.transport_protocol = params.protocol or "udp"
@@ -209,65 +209,99 @@ local function processData(szType, content)
 		result.hy2_auth = url.user
 		result.uplink_capacity = tonumber((params.upmbps or ""):match("^(%d+)")) or nil
 		result.downlink_capacity = tonumber((params.downmbps or ""):match("^(%d+)")) or nil
+		if params.mport then
+			result.flag_port_hopping = "1"
+			result.port_range = params.mport
+		end
 		if params.obfs and params.obfs ~= "none" then
 			result.flag_obfs = "1"
 			result.obfs_type = params.obfs
 			result.salamander = params["obfs-password"] or params["obfs_password"]
 		end
-		if params.sni then
+		if (params.sni and params.sni ~= "") or (params.alpn and params.alpn ~= "") then
 			result.tls = "1"
-			result.tls_host = params.sni
-		end
-		if params.insecure then
-			result.insecure = "1"
 			if params.sni then
-				result.pinsha256 = params.pinSHA256
+				result.tls_host = params.sni
+			end
+			if params.alpn then
+				local alpn = {}
+				for v in params.alpn:gmatch("[^,]+") do
+					table.insert(alpn, v)
+				end
+				result.tls_alpn = alpn
 			end
 		end
-		if params.mport then
-			result.flag_port_hopping = "1"
-			result.port_range = params.mport
+		if params.insecure == "1" then
+			result.insecure = params.insecure
+		end
+		if params.pinSHA256 then
+			result.pinsha256 = params.pinSHA256
 		end
 	elseif szType == 'ssr' then
-		local dat = split(content, "/%?")
-		local hostInfo = split(dat[1], ':')
+		-- 去掉前后空白和#注释
+		local link = trim(content:gsub("#.*$", ""))
+		local dat = split(link, "/%?")
+		local hostInfo = split(dat[1] or '', ':')
+
 		result.type = 'ssr'
-		result.server = hostInfo[1]
-		result.server_port = hostInfo[2]
-		result.protocol = hostInfo[3]
-		result.encrypt_method = hostInfo[4]
-		result.obfs = hostInfo[5]
-		result.password = base64Decode(hostInfo[6])
+		result.server = hostInfo[1] or ''
+		result.server_port = hostInfo[2] or ''
+		result.protocol = hostInfo[3] or ''
+		result.encrypt_method = hostInfo[4] or ''
+		result.obfs = hostInfo[5] or ''
+		result.password = base64Decode(hostInfo[6] or '')
+
 		local params = {}
-		for _, v in pairs(split(dat[2], '&')) do
-			local t = split(v, '=')
-			params[t[1]] = t[2]
+		if dat[2] and dat[2] ~= '' then
+            for _, v in pairs(split(dat[2], '&')) do
+                local t = split(v, '=')
+                if t[1] and t[2] then
+                    params[t[1]] = t[2]
+                end
+            end
 		end
-		result.obfs_param = base64Decode(params.obfsparam)
-		result.protocol_param = base64Decode(params.protoparam)
-		local group = base64Decode(params.group)
-		if group then
-			result.alias = "[" .. group .. "] "
+
+		result.obfs_param = base64Decode(params.obfsparam or '')
+		result.protocol_param = base64Decode(params.protoparam or '')
+
+		local group = base64Decode(params.group or '')
+		local remarks = base64Decode(params.remarks or '')
+
+		-- 拼接 alias
+		local alias = ""
+		if group ~= "" then
+			alias = "[" .. group .. "] "
 		end
-		result.alias = result.alias .. base64Decode(params.remarks)
+		alias = alias .. remarks
+		result.alias = alias
 	elseif szType == "vmess" then
+		-- 去掉前后空白和#注释
+		local link = trim(content:gsub("#.*$", ""))
+
 		-- 解析正常节点
-		local success, info = pcall(jsonParse, content)
+		local success, info = pcall(jsonParse, link)
 		if not success or type(info) ~= "table" then
 			return nil
 		end
-		-- 处理有效数据
+
+		-- 基本信息
 		result.type = 'v2ray'
 		result.v2ray_protocol = 'vmess'
 		result.server = info.add
 		result.server_port = info.port
-		if info.net == "tcp" then
-			info.net = "raw"
-		end
-		result.transport = info.net
 		result.alter_id = info.aid
 		result.vmess_id = info.id
 		result.alias = info.ps
+
+		-- 调整传输协议
+		if info.net == "tcp" then
+			info.net = "raw"
+		end
+		if info.net == "splithttp" then
+			info.net = "xhttp"
+		end
+		result.transport = info.net
+
 		-- result.mux = 1
 		-- result.concurrency = 8
 		if info.net == 'ws' then
@@ -278,11 +312,7 @@ local function processData(szType, content)
 			result.httpupgrade_host = info.host
 			result.httpupgrade_path = info.path
 		end
-		if info.net == 'splithttp' then
-			result.splithttp_host = info.host
-			result.splithttp_path = info.path
-		end
-		if info.net == 'xhttp' then
+		if info.net == 'xhttp' or info.net == 'splithttp' then
 			result.xhttp_mode = info.mode
 			result.xhttp_host = info.host
 			result.xhttp_path = info.path
@@ -290,11 +320,11 @@ local function processData(szType, content)
 			result.enable_xhttp_extra = (info.extra and info.extra ~= "") and "1" or nil
 			result.xhttp_extra = (info.extra and info.extra ~= "") and info.extra or nil
 			-- 尝试解析 JSON 数据
-			local success, Data = pcall(jsonParse, info.extra)
-			if success and Data then
+			local success, Data = pcall(jsonParse, info.extra or "")
+			if success and type(Data) == "table" then
 				local address = (Data.extra and Data.extra.downloadSettings and Data.extra.downloadSettings.address)
 					or (Data.downloadSettings and Data.downloadSettings.address)
-				result.download_address = address and address ~= "" and address or nil
+				result.download_address = (address and address ~= "") and address or nil
 			else
 				-- 如果解析失败，清空下载地址
 				result.download_address = nil
@@ -305,12 +335,11 @@ local function processData(szType, content)
 			result.h2_path = info.path
 		end
 		if info.net == 'raw' or info.net == 'tcp' then
-			if info.type and info.type ~= "http" then
-				info.type = "none"
+			result.tcp_guise = info.type or "none"
+			if result.tcp_guise == "http" then
+				result.http_host = info.host
+				result.http_path = info.path
 			end
-			result.tcp_guise = info.type
-			result.http_host = info.host
-			result.http_path = info.path
 		end
 		if info.net == 'kcp' then
 			result.kcp_guise = info.type
@@ -331,28 +360,43 @@ local function processData(szType, content)
 		if info.net == 'quic' then
 			result.quic_guise = info.type
 			result.quic_key = info.key
-			result.quic_security = info.securty
+			result.quic_security = info.security
 		end
 		if info.security then
 			result.security = info.security
 		end
 		if info.tls == "tls" or info.tls == "1" then
 			result.tls = "1"
+			result.fingerprint = info.fp
 			if info.alpn and info.alpn ~= "" then
-				result.xhttp_alpn = info.alpn
+				local alpn = {}
+				for v in info.alpn:gmatch("[^,]+") do
+					table.insert(alpn, v)
+				end
+				result.tls_alpn = alpn
 			end
 			if info.sni and info.sni ~= "" then
 				result.tls_host = info.sni
-			elseif info.host then
+			elseif info.host and info.host ~= "" then
 				result.tls_host = info.host
 			end
 			if info.ech and info.ech ~= "" then
 				result.enable_ech = "1"
-				result.ech_config = params.ech
+				result.ech_config = info.ech
 			end
-			result.insecure = allow_insecure
+			-- 兼容 allowInsecure / allowlnsecure / skip-cert-verify
+			if info.allowInsecure or info.allowlnsecure or info["skip-cert-verify"] then
+				local insecure = info.allowInsecure or info.allowlnsecure or info["skip-cert-verify"]
+				if insecure == true or insecure == "1" or insecure == "true" then
+					result.insecure = "1"
+				end
+			end
 		else
 			result.tls = "0"
+		end
+		-- 其它可选安全字段
+		if info.security then
+			result.security = info.security
 		end
 	elseif szType == "ss" then
 		local idx_sp = content:find("#") or 0
@@ -616,7 +660,7 @@ local function processData(szType, content)
 			-- 处理参数
 			if params.alpn then
 				-- 处理 alpn 参数
-				result.xhttp_alpn = params.alpn
+				result.tls_alpn = params.alpn
 			end
 
 			if params.sni then
@@ -648,9 +692,12 @@ local function processData(szType, content)
 				result.ech_config = params.ech
 			end
 			-- 处理传输协议
-			result.transport = params.type or "tcp" -- 默认传输协议为 tcp
+			result.transport = params.type or "raw" -- 默认传输协议为 raw
 			if result.transport == "tcp" then
 				result.transport = "raw"
+			end
+			if result.transport == "splithttp" then
+				result.transport = "xhttp"
 			end
 			if result.transport == "ws" then
 				result.ws_host = (result.tls ~= "1") and (params.host and UrlDecode(params.host)) or nil
@@ -658,10 +705,7 @@ local function processData(szType, content)
 			elseif result.transport == "httpupgrade" then
 				result.httpupgrade_host = (result.tls ~= "1") and (params.host and UrlDecode(params.host)) or nil
 				result.httpupgrade_path = params.path and UrlDecode(params.path) or "/"
-			elseif result.transport == "splithttp" then
-				result.splithttp_host = (result.tls ~= "1") and (params.host and UrlDecode(params.host)) or nil
-				result.splithttp_path = params.path and UrlDecode(params.path) or "/"
-			elseif result.transport == "xhttp" then
+			elseif result.transport == "xhttp" or result.transport == "splithttp" then
 				result.xhttp_host = (result.tls ~= "1") and (params.host and UrlDecode(params.host)) or nil
 				result.xhttp_mode = params.mode or "auto"
 				result.xhttp_path = params.path and UrlDecode(params.path) or "/"
@@ -669,8 +713,8 @@ local function processData(szType, content)
 				result.enable_xhttp_extra = (params.extra and params.extra ~= "") and "1" or nil
 				result.xhttp_extra = (params.extra and params.extra ~= "") and params.extra or nil
 				-- 尝试解析 JSON 数据
-				local success, Data = pcall(jsonParse, params.extra)
-				if success and Data then
+				local success, Data = pcall(jsonParse, params.extra or "")
+				if success and type(Data) == "table" then
 					local address = (Data.extra and Data.extra.downloadSettings and Data.extra.downloadSettings.address)
 						or (Data.downloadSettings and Data.downloadSettings.address)
 					result.download_address = address and address ~= "" and address or nil
@@ -717,9 +761,21 @@ local function processData(szType, content)
 		result.server_port = url.port
 		result.vmess_id = url.user
 		result.vless_encryption = params.encryption or "none"
-		result.transport = params.type or "tcp"
+		result.transport = params.type or "raw"
+		if result.transport == "tcp" then
+			result.transport = "raw"
+		end
+		if result.transport == "splithttp" then
+			result.transport = "xhttp"
+		end
 		result.tls = (params.security == "tls" or params.security == "xtls") and "1" or "0"
-		result.xhttp_alpn = params.alpn or ""
+		if params.alpn and params.alpn ~= "" then
+			local alpn = {}
+			for v in params.alpn:gmatch("[^,]+") do
+				table.insert(alpn, v)
+			end
+			result.tls_alpn = alpn
+		end
 		result.tls_host = params.sni
 		result.tls_flow = (params.security == "tls" or params.security == "reality") and params.flow or nil
 		result.fingerprint = params.fp
@@ -739,10 +795,7 @@ local function processData(szType, content)
 		elseif result.transport == "httpupgrade" then
 			result.httpupgrade_host = (result.tls ~= "1") and (params.host and UrlDecode(params.host)) or nil
 			result.httpupgrade_path = params.path and UrlDecode(params.path) or "/"
-		elseif result.transport == "splithttp" then
-			result.splithttp_host = (result.tls ~= "1") and (params.host and UrlDecode(params.host)) or nil
-			result.splithttp_path = params.path and UrlDecode(params.path) or "/"
-		elseif result.transport == "xhttp" then
+		elseif result.transport == "xhttp" or result.transport == "splithttp" then
 			result.xhttp_host = (result.tls ~= "1") and (params.host and UrlDecode(params.host)) or nil
 			result.xhttp_mode = params.mode or "auto"
 			result.xhttp_path = params.path and UrlDecode(params.path) or "/"
@@ -750,8 +803,8 @@ local function processData(szType, content)
 			result.enable_xhttp_extra = (params.extra and params.extra ~= "") and "1" or nil
 			result.xhttp_extra = (params.extra and params.extra ~= "") and params.extra or nil
 			-- 尝试解析 JSON 数据
-			local success, Data = pcall(jsonParse, params.extra)
-			if success and Data then
+			local success, Data = pcall(jsonParse, params.extra or "")
+			if success and type(Data) == "table" then
 				local address = (Data.extra and Data.extra.downloadSettings and Data.extra.downloadSettings.address)
 					or (Data.downloadSettings and Data.downloadSettings.address)
 				result.download_address = address and address ~= "" and address or nil
@@ -1127,4 +1180,3 @@ if subscribe_url and #subscribe_url > 0 then
 		end
 	end)
 end
-
