@@ -264,7 +264,7 @@ s = m:section(NamedSection, sid, "servers")
 s.anonymous = true
 s.addremove = false
 
-o = s:option(DummyValue, "ssr_url", "SS/SSR/V2RAY/TROJAN/HYSTERIA2 URL")
+o = s:option(DummyValue, "ssr_url", "SS/SSR/V2RAY/TROJAN/TUIC/HYSTERIA2 URL")
 o.rawhtml = true
 o.template = "shadowsocksr/ssrurl"
 o.value = sid
@@ -1181,19 +1181,8 @@ if is_finded("xray") then
 	end
 	o.rmempty = true
 	o:depends({type = "v2ray", v2ray_protocol = "vless", transport = "raw", tls = true})
-	o:depends({type = "v2ray", v2ray_protocol = "vless", transport = "raw", reality = true})
-
-	o = s:option(ListValue, "xhttp_tls_flow", translate("Flow"))
-	for _, v in ipairs(tls_flows) do
-		if v == "none" then
-		   o.default = "none"
-		   o:value("none", translate("none"))
-		else
-		   o:value("xtls-rprx-vision", translate("xtls-rprx-vision"))
-		end
-	end
-	o.rmempty = true
 	o:depends({type = "v2ray", v2ray_protocol = "vless", transport = "xhttp", tls = true})
+	o:depends({type = "v2ray", v2ray_protocol = "vless", transport = "raw", reality = true})
 	o:depends({type = "v2ray", v2ray_protocol = "vless", transport = "xhttp", reality = true})
 
 	-- [[ uTLS ]]--
@@ -1285,15 +1274,27 @@ o = s:option(ListValue, "tuic_alpn", translate("TUIC ALPN"))
 o.default = ""
 o:value("", translate("Default"))
 o:value("h3")
+o:value("h2")
+o:value("h3,h2")
 o:value("spdy/3.1")
 o:value("h3,spdy/3.1")
 o:depends("type", "tuic")
+
+-- IP STACK PREFERENCE
+o = s:option(ListValue, "ipstack_prefer", translate("IP Stack Preference"))
+o.default = ""
+o:value("", translate("Default"))
+o:value("v4first")
+o:value("v6first")
+o:depends("tuic_dual_stack", true)
 
 -- [[ allowInsecure ]]--
 o = s:option(Flag, "insecure", translate("allowInsecure"))
 o.rmempty = false
 o:depends("tls", true)
 o:depends("type", "hysteria2")
+o:depends("type", "tuic")
+o:depends({type = "v2ray", v2ray_protocol = "vless", reality = true})
 o.description = translate("If true, allowss insecure connection at TLS client, e.g., TLS server uses unverifiable certificates.")
 
 -- [[ Hysteria2 TLS pinSHA256 ]] --
