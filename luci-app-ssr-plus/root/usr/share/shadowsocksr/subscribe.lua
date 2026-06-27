@@ -23,20 +23,24 @@ local nodeResult = setmetatable({}, {__index = cache}) -- update result
 local name = 'shadowsocksr'
 local uciType = 'servers'
 local ucic = require "luci.model.uci".cursor()
-local proxy = ucic:get_first(name, 'server_subscribe', 'proxy', '0')
-local switch = ucic:get_first(name, 'server_subscribe', 'switch', '1')
-local allow_insecure = ucic:get_first(name, 'server_subscribe', 'allow_insecure', '0')
-local subscribe_url = ucic:get_first(name, 'server_subscribe', 'subscribe_url', {})
-local filter_words = ucic:get_first(name, 'server_subscribe', 'filter_words', '过期时间/剩余流量')
-local save_words = ucic:get_first(name, 'server_subscribe', 'save_words', '')
-local user_agent = ucic:get_first(name, 'server_subscribe', 'user_agent', 'v2rayN/9.99')
+local proxy = ucic:get_first(name, 'server_subscribe', 'proxy') or '0'
+local switch = ucic:get_first(name, 'server_subscribe', 'switch') or '1'
+local allow_insecure = ucic:get_first(name, 'server_subscribe', 'allow_insecure') or '0'
+local subscribe_url = ucic:get_first(name, 'server_subscribe', 'subscribe_url') or {}
+local filter_words = ucic:get_first(name, 'server_subscribe', 'filter_words') or '过期时间/剩余流量'
+local save_words = ucic:get_first(name, 'server_subscribe', 'save_words') or ''
+local user_agent = ucic:get_first(name, 'server_subscribe', 'user_agent') or 'v2rayN/9.99'
+local domain_resolver = ucic:get_first(name, 'server_subscribe', 'domain_resolver') or ''
+local domain_resolver_dns = ucic:get_first(name, 'server_subscribe', 'domain_resolver_dns') or ''
+local domain_resolver_dns_https = ucic:get_first(name, 'server_subscribe', 'domain_resolver_dns_https') or ''
+local domain_strategy = ucic:get_first(name, 'server_subscribe', 'domain_strategy') or ''
 
 -- 读取 ss_type 设置
-local ss_type = ucic:get_first(name, 'server_subscribe', 'ss_type')
+local ss_type = ucic:get_first(name, 'server_subscribe', 'ss_type') or ''
 -- 读取 xray_hy2_type 设置
-local xray_hy2_type = ucic:get_first(name, 'server_subscribe', 'xray_hy2_type')
+local xray_hy2_type = ucic:get_first(name, 'server_subscribe', 'xray_hy2_type') or ''
 -- 读取 xray_tj_type 设置
-local xray_tj_type = ucic:get_first(name, 'server_subscribe', 'xray_tj_type')
+local xray_tj_type = ucic:get_first(name, 'server_subscribe', 'xray_tj_type') or ''
 
 local has_ss_rust = luci.sys.exec('type -t -p sslocal 2>/dev/null || type -t -p ssserver 2>/dev/null') ~= ""
 local has_ss_libev = luci.sys.exec('type -t -p ss-redir 2>/dev/null || type -t -p ss-local 2>/dev/null') ~= ""
@@ -463,12 +467,7 @@ local function processData(szType, content, cfgid)
 			if info.type and info.type == "dns" then
 				result.kcp_guise = info.host or ""
 			end
-			result.mtu = 1350
-			result.tti = 50
-			result.uplink_capacity = 5
-			result.downlink_capacity = 20
-			result.read_buffer_size = 2
-			result.write_buffer_size = 2
+			result.seed = params.seed
 		end
 		if info.net == 'grpc' then
 			if info.path then
@@ -726,12 +725,6 @@ local function processData(szType, content, cfgid)
 					result.kcp_domain = params.host or ""
 				end
 				result.seed = params.seed
-				result.mtu = 1350
-				result.tti = 50
-				result.uplink_capacity = 5
-				result.downlink_capacity = 20
-				result.read_buffer_size = 2
-				result.write_buffer_size = 2
 			elseif result.transport == "quic" then
 				result.quic_guise = params.headerType or "none"
 				result.quic_security = params.quicSecurity or "none"
@@ -1118,12 +1111,6 @@ local function processData(szType, content, cfgid)
 					result.kcp_domain = params.host or ""
 				end
 				result.seed = params.seed
-				result.mtu = 1350
-				result.tti = 50
-				result.uplink_capacity = 5
-				result.downlink_capacity = 20
-				result.read_buffer_size = 2
-				result.write_buffer_size = 2
 			elseif result.transport == "quic" then
 				result.quic_guise = params.headerType or "none"
 				result.quic_security = params.quicSecurity or "none"
@@ -1256,33 +1243,22 @@ local function processData(szType, content, cfgid)
 			else
 				result.download_address = nil
 			end
-
 		elseif result.transport == "h2" then
 			result.h2_host = params.host and UrlDecode(params.host) or nil
 			result.h2_path = params.path and UrlDecode(params.path) or nil
-
 		elseif result.transport == "kcp" then
 			result.kcp_guise = params.headerType or "none"
 			if params.headerType and params.headerType == "dns" then
 				result.kcp_domain = params.host or ""
 			end
 			result.seed = params.seed
-			result.mtu = 1350
-			result.tti = 50
-			result.uplink_capacity = 5
-			result.downlink_capacity = 20
-			result.read_buffer_size = 2
-			result.write_buffer_size = 2
-
 		elseif result.transport == "quic" then
 			result.quic_guise = params.headerType or "none"
 			result.quic_security = params.quicSecurity or "none"
 			result.quic_key = params.key
-
 		elseif result.transport == "grpc" then
 			result.serviceName = params.serviceName
 			result.grpc_mode = params.mode or "gun"
-
 		elseif result.transport == "raw" then
 			result.tcp_guise = params.headerType or "none"
 			if result.tcp_guise == "http" then
@@ -1450,26 +1426,48 @@ end
 
 -- curl
 local function curl(url, user_agent)
-	-- 清理 URL 中的隐藏字符和前后空白
+	if not url or url == "" then
+		return "", nil
+	end
+
+	-- 清理 URL
 	url = url:gsub("%s+$", ""):gsub("^%s+", ""):gsub("%z", ""):gsub("[\r\n]", "")
+
 	-- 处理 user_agent 参数
 	local ua_opt = ""
 	if user_agent and user_agent ~= "" then
-		-- 转义双引号，防止破坏 -A 参数
-		local safe_ua = user_agent:gsub("[\r\n]", ""):gsub('[\\"`$]', '\\%0')  -- 安全转义
-		ua_opt = '-A "' .. safe_ua .. '"'
+		-- 安全 shell quoting
+		local safe_ua = string.format("%q", user_agent)
+		ua_opt = "-A " .. safe_ua
+	else
+		-- 默认 UA（避免被拦）
+		ua_opt = '-A "Mozilla/5.0"'
 	end
-	-- 安全转义 URL：用单引号包裹，并转义内部的单引号
-	local safe_url = "'" .. url:gsub("'", "'\\''") .. "'"
+
 	local cmd = string.format(
-		'curl -sSL --connect-timeout 20 --max-time 30 --retry 3 -H "Accept-Encoding: identity" %s --insecure --location %s',
+		'curl -fskL --retry 3 --connect-timeout 3 --max-time 30 ' ..
+		'-H "Accept-Encoding: identity" %s ' ..
+		'-w "%%{http_code}" "%s"',
 		ua_opt,
-		safe_url
+		url
 	)
-	-- 执行命令并获取输出
-	local stdout = luci.sys.exec(cmd)
-	stdout = trim(stdout)  -- 确保 trim 函数存在
-	local md5 = md5_string(stdout)  -- 确保 md5_string 函数存在
+
+	local result = luci.sys.exec(cmd) or ""
+	result = trim(result)
+
+	if result == "" then
+		return "", nil
+	end
+
+	-- 解析 HTTP code（最后3位）
+	local stdout = result:sub(1, -4)
+	local code = tonumber(result:sub(-3))
+
+	if code ~= 200 then
+		return "", code
+	end
+
+	local md5 = md5_string(stdout)
 	return stdout, md5
 end
 
@@ -1755,6 +1753,24 @@ local execute = function()
 					if section then
 						ucic:tset(name, section, vv)
 						ucic:set(name, section, "switch_enable", switch)
+						-- 为 Xray 节点添加域名解析配置
+						if vv.type == "v2ray" then
+							if domain_resolver and domain_resolver ~= "" then
+								ucic:set(name, section, "domain_resolver", domain_resolver)
+								if domain_resolver == "https" then
+									if domain_resolver_dns_https and domain_resolver_dns_https ~= "" then
+										ucic:set(name, section, "domain_resolver_dns_https", domain_resolver_dns_https)
+									end
+								else
+									if domain_resolver_dns and domain_resolver_dns ~= "" then
+										ucic:set(name, section, "domain_resolver_dns", domain_resolver_dns)
+									end
+								end
+							end
+							if domain_strategy and domain_strategy ~= "" then
+								ucic:set(name, section, "domain_strategy", domain_strategy)
+							end
+						end
 						add = add + 1
 					end
 				end
